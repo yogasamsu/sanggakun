@@ -4,84 +4,78 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
-# Load environment variables
 load_dotenv()
-from services.ai_service import analyze_receipt
-from services.sheet_service import save_transaction
+# Perhatikan: Kita ganti nama fungsi import agar lebih generik
+from services.ai_service import analyze_receipt 
+from services.sheet_service import save_data
 
-# Setup Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo Sanggabiz! 🤖\nKirimkan foto struk/bukti transfer, saya akan buatkan Jurnal Akuntansinya.")
+    await update.message.reply_text("Halo! 🤖\nKirim foto **Struk** atau **Buku Tabungan**, saya akan sortat otomatis.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    status_msg = await update.message.reply_text("⏳ Sedang menganalisa gambar & menentukan akun...")
+    status_msg = await update.message.reply_text("⏳ Sedang memindai dokumen...")
     
     try:
-        # 1. Ambil File Gambar
         photo_file = await update.message.photo[-1].get_file()
-        photo_url = photo_file.file_path
-        
-        # 2. Kirim ke AI Service
-        result = analyze_receipt(photo_url)
+        result = analyze_receipt(photo_file.file_path)
         
         if not result:
-            await status_msg.edit_text("❌ Gagal membaca gambar. Pastikan foto jelas.")
+            await status_msg.edit_text("❌ Gagal membaca gambar.")
             return
 
-        # 3. Format Pesan Konfirmasi (Disini tadi Errornya, sekarang sudah diperbaiki)
-        # Kita loop data jurnal untuk ditampilkan rapi
-        jurnal_text = ""
-        for item in result['jurnal']:
-            # Format angka dengan pemisah ribuan
-            debit_fmt = f"{item['debit']:,}"
-            kredit_fmt = f"{item['kredit']:,}"
-            
-            if item['debit'] > 0:
-                jurnal_text += f"🟢 (Dr) {item['akun']}: Rp {debit_fmt}\n"
-            elif item['kredit'] > 0:
-                jurnal_text += f"🔴 (Cr) {item['akun']}: Rp {kredit_fmt}\n"
+        # LOGIKA BALASAN BERDASARKAN TIPE
+        if result['jenis_dokumen'] == 'STRUK':
+            # Balasan untuk Struk (Sama seperti sebelumnya)
+            jurnal_text = ""
+            for item in result['jurnal']:
+                debit = f"{item['debit']:,}"
+                kredit = f"{item['kredit']:,}"
+                if item['debit'] > 0: jurnal_text += f"🟢 (Dr) {item['akun']}: {debit}\n"
+                else: jurnal_text += f"🔴 (Cr) {item['akun']}: {kredit}\n"
 
-        # Perhatikan: Kita pakai 'deskripsi_umum' bukan 'deskripsi'
-        confirmation_text = (
-            f"✅ **Jurnal Terbentuk!**\n"
-            f"📅 Tanggal: {result['tanggal']}\n"
-            f"🏪 Merchant: {result['merchant']}\n"
-            f"📝 Ket: {result['deskripsi_umum']}\n\n" 
-            f"**Entri Akuntansi:**\n"
-            f"{jurnal_text}\n"
-            f"Sedang memposting ke Buku Besar..."
-        )
-        await status_msg.edit_text(confirmation_text)
-
-        # 4. Simpan ke Google Sheets
-        success = save_transaction(result)
+            reply_text = (
+                f"🧾 **Struk Terdeteksi**\n"
+                f"📅 {result['tanggal']} | 🏪 {result['merchant']}\n"
+                f"📝 {result['deskripsi_umum']}\n\n"
+                f"{jurnal_text}"
+            )
         
-        if success:
-            await update.message.reply_text("💾 **Data Berhasil Disimpan!**\nCek Google Sheets, header dan jurnal sudah otomatis dibuat.")
+        elif result['jenis_dokumen'] == 'MUTASI':
+            # Balasan untuk Mutasi
+            total_trx = len(result['transaksi'])
+            total_uang = sum(item['nominal'] for item in result['transaksi'])
+            
+            reply_text = (
+                f"🏦 **Mutasi Rekening Terdeteksi**\n"
+                f"Bank: {result.get('bank', '-')}\n"
+                f"Jumlah Baris: {total_trx} transaksi\n"
+                f"Total Nilai Terbaca: Rp {total_uang:,}\n\n"
+                f"Data akan masuk ke tab 'Mutasi Bank'."
+            )
+        
+        await status_msg.edit_text(reply_text + "\n\n💾 *Menyimpan...*")
+
+        # Simpan ke Sheets
+        tipe_simpan = save_data(result)
+        
+        if tipe_simpan:
+            await update.message.reply_text(f"✅ Tersimpan di Sheet: **{tipe_simpan}**")
         else:
-            await update.message.reply_text("⚠️ Gagal menyimpan ke Google Sheets. Cek koneksi.")
+            await update.message.reply_text("⚠️ Gagal menyimpan ke Google Sheets.")
 
     except Exception as e:
-        logging.error(f"Error handling photo: {e}")
-        # Tampilkan error ke chat agar mudah debug (opsional, tapi membantu)
-        await status_msg.edit_text(f"Terjadi kesalahan sistem: {e}")
+        logging.error(f"Error: {e}")
+        await status_msg.edit_text(f"Error: {e}")
 
 if __name__ == '__main__':
     TOKEN = os.getenv("TELEGRAM_TOKEN")
-    
     application = ApplicationBuilder().token(TOKEN).build()
-    
-    start_handler = CommandHandler('start', start)
-    photo_handler = MessageHandler(filters.PHOTO, handle_photo)
-    
-    application.add_handler(start_handler)
-    application.add_handler(photo_handler)
-    
-    print("Bot Sanggabiz sedang berjalan... 🚀")
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    print("Bot Sanggabiz V2 (Multi-Doc) berjalan... 🚀")
     application.run_polling()

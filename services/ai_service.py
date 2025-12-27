@@ -6,10 +6,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analyze_receipt(image_url: str) -> dict:
     """
-    Analisa gambar dan tentukan jurnal Double-Entry.
+    Mendeteksi apakah gambar adalah STRUK (Single Transaksi) atau MUTASI (List Transaksi).
     """
     
-    # KITA SUPLAI DAFTAR AKUN KE AI
     chart_of_accounts = """
     ASET: [Kas Kecil, Bank BCA, Perlengkapan]
     KEWAJIBAN: [Utang Usaha]
@@ -18,27 +17,42 @@ def analyze_receipt(image_url: str) -> dict:
     """
 
     system_prompt = f"""
-    Kamu adalah Akuntan Senior. Tugasmu adalah membuat JURNAL AKUNTANSI (Double Entry) dari gambar struk.
+    Kamu adalah AI Finance Expert. Tugasmu:
+    1. Identifikasi jenis dokumen: Apakah "STRUK" (Bukti transaksi tunggal) atau "MUTASI" (Foto buku tabungan/screenshot e-banking dengan banyak baris).
     
-    Gunakan Daftar Akun ini (pilih yang paling relevan):
-    {chart_of_accounts}
+    SKENARIO A: Jika dokumen adalah "STRUK":
+    Buat jurnal akuntansi double-entry seperti sebelumnya.
+    Gunakan akun: {chart_of_accounts}
     
-    ATURAN PENTING:
-    1. Jika struk belanja (Pengeluaran):
-       - DEBIT: Akun Beban yang sesuai (atau Perlengkapan).
-       - KREDIT: "Kas Kecil" (Kecuali di struk tertulis Transfer/Debit Card, maka gunakan "Bank BCA").
-    2. Jika bukti transfer masuk (Pendapatan):
-       - DEBIT: "Bank BCA" (atau Kas Kecil).
-       - KREDIT: "Pendapatan Jasa".
+    SKENARIO B: Jika dokumen adalah "MUTASI":
+    Ekstrak SEMUA baris transaksi yang terlihat jelas di gambar.
     
-    OUTPUT HARUS JSON FORMAT:
+    OUTPUT HARUS JSON FORMAT (PILIH SALAH SATU STRUKTUR):
+    
+    --- Opsi 1 (Jika Struk) ---
     {{
+        "jenis_dokumen": "STRUK",
         "tanggal": "YYYY-MM-DD",
-        "merchant": "Nama Toko/Lawan Transaksi",
-        "deskripsi_umum": "Ringkasan Transaksi",
+        "merchant": "Nama Toko",
+        "deskripsi_umum": "Ket Singkat",
         "jurnal": [
-            {{"akun": "Nama Akun Debit", "debit": 15000, "kredit": 0}},
-            {{"akun": "Nama Akun Kredit", "debit": 0, "kredit": 15000}}
+             {{"akun": "Debit Account", "debit": 10000, "kredit": 0}},
+             {{"akun": "Credit Account", "debit": 0, "kredit": 10000}}
+        ]
+    }}
+
+    --- Opsi 2 (Jika Mutasi) ---
+    {{
+        "jenis_dokumen": "MUTASI",
+        "bank": "Nama Bank (BCA/Mandiri/dll)",
+        "transaksi": [
+            {{
+                "tanggal": "YYYY-MM-DD",
+                "deskripsi": "Uraian transaksi di baris ini",
+                "tipe": "CR" (Uang Masuk/Kredit) atau "DB" (Uang Keluar/Debit),
+                "nominal": 50000
+            }},
+            ... (ulangi untuk semua baris yang terbaca)
         ]
     }}
     """
@@ -55,7 +69,7 @@ def analyze_receipt(image_url: str) -> dict:
                     ],
                 }
             ],
-            max_tokens=500,
+            max_tokens=1000, # Naikkan token karena mutasi isinya banyak
         )
         
         content = response.choices[0].message.content.replace("```json", "").replace("```", "")

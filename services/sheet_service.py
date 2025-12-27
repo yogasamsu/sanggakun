@@ -5,37 +5,65 @@ from datetime import datetime
 gc = gspread.service_account(filename='google_key.json')
 SH_ID = os.getenv("SPREADSHEET_ID")
 
-def save_transaction(data: dict):
+def save_data(data: dict):
+    """
+    Fungsi Router: Menyimpan ke Sheet Jurnal ATAU Sheet Mutasi.
+    """
     try:
         sh = gc.open_by_key(SH_ID)
-        worksheet = sh.sheet1 
-        
-        # Cek Header (Update Kolom agar sesuai format Jurnal Umum)
-        if not worksheet.get('A1'): 
-            header = ["Tanggal", "No. Bukti", "Deskripsi", "Nama Akun (COA)", "Debit", "Kredit", "Timestamp"]
-            worksheet.append_row(header)
-
-        # Generate Nomor Bukti Unik (misal pakai Timestamp simpel)
-        no_bukti = f"TRX-{int(datetime.now().timestamp())}"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # LOOPING: Kita simpan setiap baris jurnal (Debit & Kredit)
-        rows_to_add = []
-        for entry in data['jurnal']:
-            row = [
-                data['tanggal'],
-                no_bukti,            # ID yang sama untuk 2 baris ini (Pairing)
-                data['merchant'] + " - " + data['deskripsi_umum'],
-                entry['akun'],       # Ini Akun hasil pilihan AI
-                entry['debit'],
-                entry['kredit'],
-                timestamp
-            ]
-            rows_to_add.append(row)
-        
-        # Simpan sekaligus (lebih efisien)
-        worksheet.append_rows(rows_to_add)
-        return True
+
+        # === JALUR 1: STRUK (JURNAL UMUM) ===
+        if data['jenis_dokumen'] == 'STRUK':
+            worksheet = sh.sheet1 
+            
+            # Auto-Header Jurnal
+            if not worksheet.get('A1'): 
+                worksheet.append_row(["Tanggal", "No. Bukti", "Deskripsi", "Nama Akun (COA)", "Debit", "Kredit", "Timestamp"])
+
+            no_bukti = f"TRX-{int(datetime.now().timestamp())}"
+            rows_to_add = []
+            
+            for entry in data['jurnal']:
+                rows_to_add.append([
+                    data['tanggal'],
+                    no_bukti,
+                    data['merchant'] + " - " + data['deskripsi_umum'],
+                    entry['akun'],
+                    entry['debit'],
+                    entry['kredit'],
+                    timestamp
+                ])
+            
+            worksheet.append_rows(rows_to_add)
+            return "JURNAL"
+
+        # === JALUR 2: MUTASI BANK ===
+        elif data['jenis_dokumen'] == 'MUTASI':
+            # Coba cari sheet 'Mutasi Bank', kalau belum ada, buat baru
+            try:
+                worksheet = sh.worksheet("Mutasi Bank")
+            except:
+                worksheet = sh.add_worksheet(title="Mutasi Bank", rows="1000", cols="6")
+            
+            # Auto-Header Mutasi
+            if not worksheet.get('A1'):
+                worksheet.append_row(["Tanggal", "Bank", "Deskripsi", "Tipe (DB/CR)", "Nominal", "Timestamp"])
+
+            rows_to_add = []
+            for item in data['transaksi']:
+                rows_to_add.append([
+                    item['tanggal'],
+                    data.get('bank', 'Unknown'),
+                    item['deskripsi'],
+                    item['tipe'],
+                    item['nominal'],
+                    timestamp
+                ])
+            
+            worksheet.append_rows(rows_to_add)
+            return "MUTASI"
+
     except Exception as e:
         print(f"Error Sheets: {e}")
         return False
