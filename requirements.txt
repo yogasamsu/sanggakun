@@ -1,0 +1,5 @@
+pip install --upgrade python-telegram-bot
+openai==1.*
+gspread==5.*
+python-dotenv
+pandas
